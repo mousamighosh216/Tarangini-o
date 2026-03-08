@@ -1,0 +1,3 @@
+# CycleCreate
+# CycleResponse
+# CyclePredictionResponse
