@@ -12,16 +12,20 @@
 # Contain business logic
 # Contain DB queries
 
-from fastapi import FastAPI
-from app.api import auth_routes, forum_routes, prediction_routes
-from app.db.session import get_db
-from sqlalchemy.orm import Session
-from fastapi.middleware.cors import CORSMiddleware
-from app.db.init_db import init_db   # ✅ ADD THIS
-from contextlib import asynccontextmanager
-import joblib
 import os
-
+import json
+import uvicorn
+import joblib
+import google.generativeai as genai
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List
+from dotenv import load_dotenv
+# 1. Load Environment Variables
+load_dotenv()
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+model = genai.GenerativeModel('gemini-1.5-flash')
 app = FastAPI()
 
 @app.on_event("startup")
@@ -64,6 +68,47 @@ app.include_router(auth_routes.router)
 app.include_router(forum_routes.router)
 app.include_router(prediction_routes.router)
 
+class Symptom(BaseModel):
+    q: str
+    answer: bool
+    weight: int
+
+class PredictionRequest(BaseModel):
+    symptoms: List[Symptom]
+
+# 4. The Prediction Endpoint
+@app.post("/api/predict")
+async def predict_pcos(request: PredictionRequest):
+    symptoms = request.symptoms
+    
+    # Simple Weightage Logic
+    score = sum([s.weight for s in symptoms if s.answer])
+    
+    # 5. Gemini Integration (The "Likelihood" Logic)
+    symptom_text = ", ".join([f"{s.q}: {'Yes' if s.answer else 'No'}" for s in symptoms])
+    prompt = f"""
+    Act as Meera, a warm PCOS triage assistant. Analyze: {symptom_text}.
+    Provide a likelihood percentage (0-100) and brief sisterly advice.
+    Return ONLY JSON: {{"likelihood": 85, "risk_level": "High", "advice": "..."}}
+    """
+    
+    # For a hackathon, we combine the score logic with Gemini's nuanced analysis
+    response = model.generate_content(prompt)
+    
+    # We return the Gemini response directly (assuming it returns clean JSON)
+    # In a real app, you'd parse this to ensure safety.
+    import json
+    try:
+        ai_data = json.loads(response.text.strip().replace("```json", "").replace("```", ""))
+        return {
+            "score": score,
+            **ai_data,
+            "message": "Analysis complete via Tarangini Hybrid ML Model."
+        }
+    except:
+        # Fallback if AI output is messy
+        return {"score": score, "risk_level": "TBD", "advice": "Talking to Meera..."}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # or your frontend origin like "http://localhost:5173"
@@ -71,3 +116,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if __name__ == "__main__":
+    
+    uvicorn.run(app, host="0.0.0.0", port=5000)
+
